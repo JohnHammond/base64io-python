@@ -209,6 +209,8 @@ class Base64IO(io.IOBase):
 
         self.bytes_counter += len(chunk)
 
+        return len(chunk)
+
     def write(self, b, line_length=76):
         # type: (bytes) -> int
         """Base64-encode the bytes and write them to the wrapped stream.
