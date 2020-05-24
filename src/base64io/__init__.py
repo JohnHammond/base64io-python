@@ -23,7 +23,15 @@ LOGGER_NAME = "base64io"
 
 try:  # Python 3.5.0 and 3.5.1 have incompatible typing modules
     from types import TracebackType  # noqa pylint: disable=unused-import
-    from typing import Union, IO, Iterable, List, Type, Optional, AnyStr  # noqa pylint: disable=unused-import
+    from typing import (
+        Union,
+        IO,
+        Iterable,
+        List,
+        Type,
+        Optional,
+        AnyStr,
+    )  # noqa pylint: disable=unused-import
 except ImportError:  # pragma: no cover
     # We only actually need these imports when running the mypy checks
     pass
@@ -96,11 +104,15 @@ class Base64IO(io.IOBase):
         """
         required_attrs = ("read", "write", "close", "closed", "flush")
         if not all(hasattr(wrapped, attr) for attr in required_attrs):
-            raise TypeError("Base64IO wrapped object must have attributes: %s" % (repr(sorted(required_attrs)),))
+            raise TypeError(
+                "Base64IO wrapped object must have attributes: %s"
+                % (repr(sorted(required_attrs)),)
+            )
         super(Base64IO, self).__init__()
         self.__wrapped = wrapped
         self.__read_buffer = b""
         self.__write_buffer = b""
+        self.bytes_counter = 0
 
     def __enter__(self):
         # type: () -> Base64IO
@@ -143,7 +155,11 @@ class Base64IO(io.IOBase):
         try:
             method = getattr(self.__wrapped, method_name)
         except AttributeError:
-            if _py2() and isinstance(self.__wrapped, file) and mode in self.__wrapped.mode:
+            if (
+                _py2()
+                and isinstance(self.__wrapped, file)
+                and mode in self.__wrapped.mode
+            ):
                 return True
             return False
         else:
@@ -176,7 +192,24 @@ class Base64IO(io.IOBase):
         """Flush the write buffer of the wrapped stream."""
         return self.__wrapped.flush()
 
-    def write(self, b):
+    def write_chunk(self, chunk, line_length=76):
+        remaining_data = line_length - (self.bytes_counter % line_length)
+
+        self.__wrapped.write(chunk[0:remaining_data])
+
+        if remaining_data <= len(chunk):
+            self.__wrapped.write(b"\n")
+
+            for i in range(remaining_data, len(chunk), line_length):
+                ending = i + line_length
+                self.__wrapped.write(chunk[i:ending])
+
+                if ending <= len(chunk):
+                    self.__wrapped.write(b"\n")
+
+        self.bytes_counter += len(chunk)
+
+    def write(self, b, line_length=76):
         # type: (bytes) -> int
         """Base64-encode the bytes and write them to the wrapped stream.
 
@@ -205,12 +238,18 @@ class Base64IO(io.IOBase):
 
         # If an even base64 chunk or finalizing the stream, write through.
         if len(_bytes_to_write) % 3 == 0:
-            return self.__wrapped.write(base64.b64encode(_bytes_to_write))
+
+            # Write the data
+            return self.write_chunk(base64.b64encode(_bytes_to_write), line_length)
 
         # We're not finalizing the stream, so stash the trailing bytes and encode the rest.
         trailing_byte_pos = -1 * (len(_bytes_to_write) % 3)
         self.__write_buffer = _bytes_to_write[trailing_byte_pos:]
-        return self.__wrapped.write(base64.b64encode(_bytes_to_write[:trailing_byte_pos]))
+
+        # Base64 encoded the data
+        return self.write_chunk(
+            base64.b64encode(_bytes_to_write[:trailing_byte_pos]), line_length
+        )
 
     def writelines(self, lines):
         # type: (Iterable[bytes]) -> None
@@ -245,7 +284,9 @@ class Base64IO(io.IOBase):
         _remaining_bytes_to_read = total_bytes_to_read - _data_buffer.tell()
 
         while _remaining_bytes_to_read > 0:
-            _raw_additional_data = _to_bytes(self.__wrapped.read(_remaining_bytes_to_read))
+            _raw_additional_data = _to_bytes(
+                self.__wrapped.read(_remaining_bytes_to_read)
+            )
             if not _raw_additional_data:
                 # No more data to read from wrapped stream.
                 break
